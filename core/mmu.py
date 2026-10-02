@@ -1,62 +1,105 @@
 from math import ceil
 
+from algorithms.fifo import FIFO
 from core.models import PAGE_SIZE, RAM_FRAMES, Page, Pointer, Process
 
 
 class MMU:
-    def __init__(self):
-        # Cada posición representa un marco de RAM.
+    def __init__(self, algorithm=None):
         self.ram: list[Page | None] = [None] * RAM_FRAMES
-
-        # Procesos y punteros registrados.
         self.processes: dict[int, Process] = {}
         self.pointers: dict[int, Pointer] = {}
 
-        # Los identificadores nunca se reutilizan.
         self.next_ptr = 1
         self.next_page_id = 1
 
-        # Estadísticas de la simulación.
+        # Permite sustituir FIFO por otros algoritmos después.
+        self.algorithm = algorithm if algorithm is not None else FIFO()
+
         self.clock = 0
         self.page_hits = 0
         self.page_faults = 0
         self.thrashing_time = 0
 
-    def _get_free_frames(self):
-        """Devuelve los números de los marcos disponibles."""
-        return [
-            index
-            for index, page in enumerate(self.ram)
-            if page is None
-        ]
+    def _get_free_frame(self):
+        for frame, page in enumerate(self.ram):
+            if page is None:
+                return frame
+        return None
 
     def _get_process(self, pid):
-        """Obtiene o registra un proceso activo."""
         if pid not in self.processes:
             self.processes[pid] = Process(pid=pid)
 
         process = self.processes[pid]
 
         if not process.active:
-            raise ValueError(
-                f"El proceso {pid} ya fue finalizado"
-            )
+            raise ValueError(f"El proceso {pid} ya finalizo")
 
         return process
 
+    def _find_resident_page(self, page_id):
+        for page in self.ram:
+            if page is not None and page.page_id == page_id:
+                return page
+        return None
+
+    def _select_victim(self, protected=None):
+        """
+        Busca una pagina reemplazable sin seleccionar
+        las paginas protegidas por la operacion actual.
+        """
+        protected = protected or set()
+
+        for page_id in self.algorithm.get_queue():
+            if page_id in protected:
+                continue
+
+            page = self._find_resident_page(page_id)
+
+            if page is not None:
+                self.algorithm.remove_page(page_id)
+                return page
+
+        raise MemoryError(
+            "No hay paginas disponibles para reemplazar"
+        )
+
+    def _load_page(self, page, protected=None):
+        """Carga una pagina en RAM aplicando reemplazo."""
+        if page.in_ram:
+            return
+
+        frame = self._get_free_frame()
+
+        if frame is None:
+            victim = self._select_victim(protected)
+
+            frame = victim.frame
+
+            # La pagina reemplazada permanece en
+            # el sistema, pero pasa a memoria virtual.
+            victim.in_ram = False
+            victim.frame = None
+
+            self.ram[frame] = None
+
+        page.frame = frame
+        page.in_ram = True
+        page.arrival_time = self.clock
+
+        self.ram[frame] = page
+        self.algorithm.add_page(page.page_id)
+
+        # Las paginas nuevas y recuperadas son fallos.
+        self.page_faults += 1
+        self.clock += 5
+        self.thrashing_time += 5
+
     def new(self, pid, size):
-        """Asigna memoria nueva a un proceso."""
+        """Crea un puntero y asigna sus paginas."""
         if size <= 0:
-            raise ValueError("El tamaño debe ser mayor que cero")
-
-        # Versión inicial: todavía no incorpora FIFO.
-        pages_needed = ceil(size / PAGE_SIZE)
-        free_frames = self._get_free_frames()
-
-        if len(free_frames) < pages_needed:
-            raise MemoryError(
-                "RAM insuficiente: todavía falta implementar FIFO"
-            )
+            raise ValueError("El tamaño debe ser positivo")
 
         process = self._get_process(pid)
 
@@ -69,61 +112,70 @@ class MMU:
             size=size
         )
 
-        for frame in free_frames[:pages_needed]:
+        self.pointers[ptr] = pointer
+        process.pointers[ptr] = pointer
+
+        pages_needed = ceil(size / PAGE_SIZE)
+
+        for _ in range(pages_needed):
             page = Page(
                 page_id=self.next_page_id,
                 pid=pid,
-                ptr=ptr,
-                frame=frame,
-                in_ram=True
+                ptr=ptr
             )
 
             self.next_page_id += 1
-
-            self.ram[frame] = page
             pointer.pages.append(page)
 
-            # Las páginas nuevas siempre son fallos.
-            self.page_faults += 1
-            self.clock += 5
-            self.thrashing_time += 5
-
-        self.pointers[ptr] = pointer
-        process.pointers[ptr] = pointer
+            self._load_page(page)
 
         return ptr
 
     def use(self, ptr):
-        """Accede a todas las páginas de un puntero."""
+        """Accede a las paginas del puntero."""
         if ptr not in self.pointers:
             raise ValueError(f"El puntero {ptr} no existe")
 
         pointer = self.pointers[ptr]
 
-        for page in pointer.pages:
-            if not page.in_ram:
-                raise MemoryError(
-                    "Página en memoria virtual: "
-                    "todavía falta implementar FIFO"
-                )
+        if len(pointer.pages) > RAM_FRAMES:
+            raise MemoryError(
+                "Pendiente definir accesos a punteros "
+                "mayores que la RAM disponible"
+            )
 
-            self.page_hits += 1
-            self.clock += 1
+        # Protegemos las paginas del puntero que
+        # ya se encuentran residentes.
+        protected = {
+            page.page_id
+            for page in pointer.pages
+            if page.in_ram
+        }
+
+        for page in pointer.pages:
+            if page.in_ram:
+                self.page_hits += 1
+                self.clock += 1
+            else:
+                self._load_page(page, protected)
+
+            protected.add(page.page_id)
 
             page.reference_bit = True
             page.frequency += 1
             page.last_used = self.clock
 
     def delete(self, ptr):
-        """Libera todas las páginas de un puntero."""
+        """Libera todas las paginas del puntero."""
         if ptr not in self.pointers:
             raise ValueError(f"El puntero {ptr} no existe")
 
         pointer = self.pointers.pop(ptr)
 
         for page in pointer.pages:
-            if page.in_ram and page.frame is not None:
+            if page.in_ram:
                 self.ram[page.frame] = None
+                self.algorithm.remove_page(page.page_id)
 
             page.frame = None
             page.in_ram = False
@@ -132,16 +184,14 @@ class MMU:
         del process.pointers[ptr]
 
     def kill(self, pid):
-        """Finaliza un proceso y libera toda su memoria."""
+        """Finaliza un proceso y libera sus recursos."""
         if pid not in self.processes:
             raise ValueError(f"El proceso {pid} no existe")
 
         process = self.processes[pid]
 
         if not process.active:
-            raise ValueError(
-                f"El proceso {pid} ya fue finalizado"
-            )
+            raise ValueError(f"El proceso {pid} ya finalizo")
 
         for ptr in list(process.pointers):
             self.delete(ptr)
@@ -149,12 +199,17 @@ class MMU:
         process.active = False
 
     def get_stats(self):
-        """Devuelve las estadísticas actuales."""
+        """Devuelve las estadisticas de memoria."""
         used_frames = sum(
             page is not None for page in self.ram
         )
 
-        # Solo se consideran las asignaciones existentes.
+        virtual_pages = sum(
+            not page.in_ram
+            for pointer in self.pointers.values()
+            for page in pointer.pages
+        )
+
         fragmentation = sum(
             ceil(pointer.size / PAGE_SIZE) * PAGE_SIZE
             - pointer.size
@@ -170,7 +225,10 @@ class MMU:
             "active_processes": active_processes,
             "ram_used_kb": used_frames * 4,
             "ram_percentage": used_frames / RAM_FRAMES * 100,
-            "virtual_ram_kb": 0,
+            "virtual_ram_kb": virtual_pages * 4,
+            "virtual_ram_percentage": (
+                virtual_pages / RAM_FRAMES * 100
+            ),
             "clock": self.clock,
             "page_hits": self.page_hits,
             "page_faults": self.page_faults,
