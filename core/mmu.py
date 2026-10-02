@@ -132,34 +132,35 @@ class MMU:
         return ptr
 
     def use(self, ptr):
-        """Accede a las paginas del puntero."""
+        """Accede a las paginas de un puntero."""
         if ptr not in self.pointers:
             raise ValueError(f"El puntero {ptr} no existe")
 
         pointer = self.pointers[ptr]
 
-        if len(pointer.pages) > RAM_FRAMES:
-            raise MemoryError(
-                "Pendiente definir accesos a punteros "
-                "mayores que la RAM disponible"
-            )
+        fits_in_ram = len(pointer.pages) <= RAM_FRAMES
 
-        # Protegemos las paginas del puntero que
-        # ya se encuentran residentes.
-        protected = {
-            page.page_id
-            for page in pointer.pages
-            if page.in_ram
-        }
+        protected = set()
+
+        if fits_in_ram:
+            protected = {
+                page.page_id
+                for page in pointer.pages
+                if page.in_ram
+            }
 
         for page in pointer.pages:
             if page.in_ram:
                 self.page_hits += 1
                 self.clock += 1
             else:
-                self._load_page(page, protected)
+                self._load_page(
+                    page,
+                    protected if fits_in_ram else None
+                )
 
-            protected.add(page.page_id)
+            if fits_in_ram:
+                protected.add(page.page_id)
 
             page.reference_bit = True
             page.frequency += 1
