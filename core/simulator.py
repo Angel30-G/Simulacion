@@ -79,3 +79,51 @@ class Simulator:
             return "LFU"
         elif isinstance(self.user_algorithm, SecondChance):
             return "SC"
+
+
+    def get_state(self, mmu):
+        stats = mmu.get_stats()
+
+        
+        colores = [
+            "#f38ba8", "#fab387", "#f9e2af", "#a6e3a1",
+            "#94e2d5", "#89dceb", "#89b4fa", "#b4befe",
+            "#cba6f7", "#f5c2e7", "#eba0ac", "#74c7ec"
+        ]
+
+        frames = []
+        for page in mmu.ram:
+            if page is None:
+                frames.append(None)
+            else:
+                color = colores[(page.pid - 1) % len(colores)]
+                frames.append((page.pid, page.page_id, color))
+
+
+        pages = []
+        for pointer in mmu.pointers.values():
+            for page in pointer.pages:
+                pages.append({
+                    "page_id": page.page_id,
+                    "pid": page.pid,
+                    "loaded": page.in_ram,
+                    "l_addr": page.ptr,
+                    "m_addr": page.frame if page.in_ram else "",
+                    "d_addr": "" if page.in_ram else page.page_id,
+                    "loaded_t": page.arrival_time
+                })
+
+        # Se preparan los datos que necesita la interfaz
+        return {
+            "frames": frames,
+            "pages": pages,
+            "time": stats["clock"],
+            "processes": stats["active_processes"],
+            "ram_kb": stats["ram_used_kb"],
+            "ram_pct": round(stats["ram_percentage"], 1),
+            "vram_kb": stats["virtual_ram_kb"],
+            "vram_pct": round(stats["virtual_ram_percentage"], 1),
+            "thrash_s": stats["thrashing_time"],
+            "thrash_pct": round(stats["thrashing_percentage"], 1),
+            "frag_kb": round(stats["fragmentation_bytes"] / 1024, 2)
+        }

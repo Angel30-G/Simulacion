@@ -74,3 +74,23 @@ def test_opt_vs_lru():
     # Se comparan los fallos que tuvo cada algoritmo
     assert opt["page_faults"] <= lru["page_faults"]
     assert simulador.current_index == len(operaciones)
+
+
+def test_simulator_state():
+    operaciones = [
+        ("new", [1, 500]),
+        ("new", [1, 10000]),
+        ("use", [1])
+    ]
+
+    simulador = Simulator(operaciones, "LRU")
+    simulador.run()
+
+    estado = simulador.get_state(simulador.user_mmu)
+
+    # Se comprueba que los datos de memoria sean correctos
+    assert len(estado["frames"]) == 100
+    assert len(estado["pages"]) == 4
+    assert estado["ram_kb"] == 16
+    assert estado["processes"] == 1
+    assert estado["time"] == 21
