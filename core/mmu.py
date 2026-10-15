@@ -1,3 +1,4 @@
+
 from math import ceil
 
 from algorithms.fifo import FIFO
@@ -50,6 +51,18 @@ class MMU:
         las paginas protegidas por la operacion actual.
         """
         protected = protected or set()
+
+        if not isinstance(self.algorithm, FIFO):
+            page_id = self.algorithm.select_victim(self.ram, protected)
+            page = self._find_resident_page(page_id)
+
+            if page is None or page_id in protected:
+                raise MemoryError(
+                    "No hay paginas disponibles para reemplazar"
+                )
+
+            self.algorithm.remove_page(page_id)
+            return page
 
         for page_id in self.algorithm.get_queue():
             if page_id in protected:
