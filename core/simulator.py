@@ -1,32 +1,81 @@
-from PyQt5.QtCore import QTimer
+from core.mmu import MMU
+from algorithms.fifo import FIFO
+from algorithms.lru import LRU
+from algorithms.lfu import LFU
+from algorithms.second_chance import SecondChance
+from algorithms.opt import OPT
 
-class SimulationWindow(QWidget):
-    def __init__(self):
-        super().__init__()
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.step)
-        self.paused = False
+
+class Simulator:
+    def __init__(self, operations, algorithm):
+        self.operations = operations
         self.current_index = 0
-        # ...
 
-    def start_simulation(self):
-        self.timer.start(100)  # 100 ms por paso
+        self.opt = OPT()
+        self.opt.set_operations(operations)
+
+        if algorithm == "FIFO":
+            self.user_algorithm = FIFO()
+        elif algorithm == "LRU":
+            self.user_algorithm = LRU()
+        elif algorithm == "LFU":
+            self.user_algorithm = LFU()
+        elif algorithm == "SC":
+            self.user_algorithm = SecondChance()
+        else:
+            raise ValueError("Algoritmo no valido")
+
+        self.opt_mmu = MMU(self.opt)
+        self.user_mmu = MMU(self.user_algorithm)
+
+    def execute_operation(self, mmu, operation):
+        op, args = operation
+
+        if op == "new":
+            mmu.new(args[0], args[1])
+        elif op == "use":
+            mmu.use(args[0])
+        elif op == "delete":
+            mmu.delete(args[0])
+        elif op == "kill":
+            mmu.kill(args[0])
+        else:
+            raise ValueError("Operacion no valida")
 
     def step(self):
         if self.current_index >= len(self.operations):
-            self.timer.stop()
-            return
-        # Ejecutar una operación en ambos simuladores
-        self.opt_mmu.execute(self.operations[self.current_index])
-        self.user_mmu.execute(self.operations[self.current_index])
+            return False
+
+        # Se ejecuta la misma operacion en las dos MMU
+        operation = self.operations[self.current_index]
+
+        self.opt.set_current_index(self.current_index)
+
+        self.execute_operation(self.opt_mmu, operation)
+        self.execute_operation(self.user_mmu, operation)
+
         self.current_index += 1
-        self.update_visualization()
+        return True
 
-    def pause(self):
-        self.timer.stop()
-        self.paused = True
+    def run(self):
+        while self.step():
+            pass
 
-    def resume(self):
-        if self.paused:
-            self.timer.start(100)
-            self.paused = False
+    def get_stats(self):
+        return {
+            "OPT": self.opt_mmu.get_stats(),
+            "USER": self.user_mmu.get_stats()
+        }
+
+    def reset(self):
+        self.__init__(self.operations, self.get_algorithm_name())
+
+    def get_algorithm_name(self):
+        if isinstance(self.user_algorithm, FIFO):
+            return "FIFO"
+        elif isinstance(self.user_algorithm, LRU):
+            return "LRU"
+        elif isinstance(self.user_algorithm, LFU):
+            return "LFU"
+        elif isinstance(self.user_algorithm, SecondChance):
+            return "SC"
